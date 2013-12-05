@@ -431,35 +431,59 @@ exports.init = function (grunt) {
         // it. Strip them out.
         remoteHash = res.headers.etag.replace(/"/g, '');
 
-        // Get an md5 of the local file so we can verify the upload.
-        localHash = crypto.createHash('md5').update(data).digest('hex');
 
-        if (remoteHash === localHash) {
-          // the file exists and is the same so do nothing with that
-          return dfd.resolve(util.format(MSG_SKIP_MATCHES, prettySrc));
+
+
+        var onLocalHash = function() {
+
+          if (remoteHash === localHash) {
+            // the file exists and is the same so do nothing with that
+
+            return dfd.resolve(util.format(MSG_SKIP_MATCHES, prettySrc));
+          } else {
+            // console.log("diff hash!", remoteHash, localHash)
+          }
+
+          fs.stat( src, function(err, stats) {
+            var remoteWhen, localWhen, upload;
+
+            if (err) {
+              return dfd.reject(makeError(MSG_ERR_UPLOAD, prettySrc, err));
+            }
+
+            // which one is newer? if local is newer, we should upload it
+            remoteWhen = new Date(res.headers['last-modified'] || "0"); // earliest date possible if no header is returned
+            localWhen = new Date(stats.mtime || "1"); // make second earliest date possible if mtime isn't set
+
+            if ( localWhen <= remoteWhen ) {
+              // console.log(localWhen, remoteWhen)
+              // Remote file was newer
+              return dfd.resolve(util.format(MSG_SKIP_OLDER, prettySrc));
+            }
+
+            // default is that local is newer, only upload when it is
+            upload = exports.upload( src, dest, opts);
+            // pass through the dfd state
+            upload.then( dfd.resolve, dfd.reject );
+          });
+
         }
 
-        fs.stat( src, function(err, stats) {
-          var remoteWhen, localWhen, upload;
+        if (options.gzip) {
+          // If we're gzipping, assuming the remote file is also gzipped
+          zlib.gzip(data, function(err, buffer) {
+            if (!err) {
+              localHash = crypto.createHash('md5').update(buffer).digest('hex');
+            }
+            onLocalHash(localHash);
+          });
 
-          if (err) {
-            return dfd.reject(makeError(MSG_ERR_UPLOAD, prettySrc, err));
-          }
+        } else {
+          // Get an md5 of the local file so we can verify the upload.
+          localHash = crypto.createHash('md5').update(data).digest('hex');
+          onLocalHash(localHash);
+        }
 
-          // which one is newer? if local is newer, we should upload it
-          remoteWhen = new Date(res.headers['last-modified'] || "0"); // earliest date possible if no header is returned
-          localWhen = new Date(stats.mtime || "1"); // make second earliest date possible if mtime isn't set
-
-          if ( localWhen <= remoteWhen ) {
-            // Remote file was older
-            return dfd.resolve(util.format(MSG_SKIP_OLDER, prettySrc));
-          }
-
-          // default is that local is newer, only upload when it is
-          upload = exports.upload( src, dest, opts);
-          // pass through the dfd state
-          upload.then( dfd.resolve, dfd.reject );
-        });
       });
     }).end();
 
